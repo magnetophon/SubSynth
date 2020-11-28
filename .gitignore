@@ -1,0 +1,6 @@
+/SubSynth
+*-svg/
+/faust-graphs.html
+/faust\.??????/
+*.cpp
+/*.xml

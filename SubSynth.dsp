@@ -83,7 +83,7 @@ with {
 
 gain               = midi_group(hslider("[0]gain",0.5,0,1,0.01));
 f                  = midi_group(hslider("[1]freq",maxFreq,minFreq,maxFreq,0.001));
-b                  = midi_group(hslider("[2]bend [midi:pitchwheel]",0,-2,2,0.001):ba.semi2ratio);
+b                  = midi_group(hslider("[2]bend [midi:pitchwheel]",0,-2,2,0.001):ba.semi2ratio): si.polySmooth(gate,0.999,1);
 gate               = midi_group( button("[3]gate"));
 // gate            = nrNotesPlaying>0;
 
@@ -91,21 +91,19 @@ freq               = f*b;
 // freq            = (lastNote:ba.pianokey2hz) * b;
 // freq            = target_group(hslider("freq", 110, 55, 880, 1):si.smoo);
 
-a                  = envelope_group(hslider("[0]attack [tooltip: Attack time in seconds][unit:s] [scale:log]", 0, 0, 1, 0.001));
-d                  = envelope_group(hslider("[1]decay [tooltip: Decay time in seconds][unit:s] [scale:log]", 0.5, 0, 1, 0.001));
-s                  = envelope_group(hslider("[2]sustain [tooltip: Sustain level]", 0, 0, 1, 0.001));
-r                  = envelope_group(hslider("[3]release [tooltip: Release time in seconds][unit:s] [scale:log]", 0.020, 0, 1, 0.001));
+a                  = envelope_group(hslider("[0]attack [tooltip: Attack time in seconds][unit:s] [scale:log]", 0, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
+d                  = envelope_group(hslider("[1]decay [tooltip: Decay time in seconds][unit:s] [scale:log]", 0.5, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
+s                  = envelope_group(hslider("[2]sustain [tooltip: Sustain level]", 0, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
+r                  = envelope_group(hslider("[3]release [tooltip: Release time in seconds][unit:s] [scale:log]", 0.020, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
 
 targetFreq         = punch_group(hslider("[0]target frequency", 45, 0, 127, 1)):ba.midikey2hz : si.polySmooth(gate,0.999,1);
 // targetFreq      = target_group(hslider("target freq", 110, minFreq, 880, 1)
 // : si.polySmooth(gate,0.999,1))
 // ;
 punch              = punch_group(hslider("[1]punch frequency", 69, 0, 127, 1)):ba.midikey2hz: si.polySmooth(gate,0.999,1);
-decayT             = punch_group(hslider("[2]decay time", 0.02, 0, 0.8, 0.001));
+decayT             = punch_group(hslider("[2]decay time", 0.02, 0, 0.8, 0.001)): si.polySmooth(gate,0.999,1);
 
 retrigger          = checkbox("retrigger")*-1+1;
-
-
 level              = target_group(hslider("level", 0, -60, 0, 1): si.polySmooth(gate,0.999,1):ba.db2linear);
 
 tabs(x)            = tgroup("", x);

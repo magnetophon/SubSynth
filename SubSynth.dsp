@@ -1,6 +1,6 @@
 declare author "Bart Brouns";
 declare license "AGPLv3";
-declare name "lastNote";
+declare name "SubSynth";
 declare options "[midi:on][nvoices:1]";
 
 import("stdfaust.lib");
@@ -18,8 +18,9 @@ SubS(freq,gain,gate) =
   // * level
   :>_*gainEnvelope<:(_,_)
 with {
-  gainEnvelope = en.adsr(a,d,s,r,gate)*gain;
+  gainEnvelope = curved_adsr(a,d,s,r,ac,dc,rc,gate);
 };
+
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -38,7 +39,8 @@ with {
   punchFreq = (absFreqOffset:ba.hz2midikey)-(subFreq:ba.hz2midikey);
   subFreq = freq*oct/maxOct;
   punchEnv =
-    gate:ba.impulsify:si.lag_ud(0,decayT);
+    // gate:ba.impulsify:si.lag_ud(0,decayT);
+    curved_adsr(ap,dp,0,0.02,acp,dcp,0,gate);
   // hslider("pe", 0, 0, 1, 0.01);
 
   oct =
@@ -78,6 +80,72 @@ with {
 };
 
 ///////////////////////////////////////////////////////////////////////////////
+//                                 envelopes                                 //
+///////////////////////////////////////////////////////////////////////////////
+
+// shaper: https://www.desmos.com/calculator/6wotdstndy
+
+curved_adsr(a,d,s,r,ac,dc,rc,gate) =
+  FB~(_,_) // we need the previous state and value
+     :!,_ // we only need the actual envelope output
+with {
+  FB(prevState, prevValue) =
+    // states are :0 = release, 1= attack, 2 = decay
+    state
+    // the actual value of the envelope
+   ,envelope
+  with { // so we can use prevState by name, without passing it as an argument
+  state = int(attackDecayState * gate); // if no gate then force release
+  attackDecayState = prevState+trigAttackDecay+trigDecay; // if no triggers, stay where you are, otherwise move to 1 and then 2
+  trigAttackDecay = gate'-gate == -1; // auto-impulsify
+  trigDecay =
+    (prevState==1) & (attackRamp ==1)  // auto-impulsify because prev will increase
+    | trigAttackDecay & (attSamps==0);
+  attackRamp = ramp(attSamples,trigAttackDecay);
+  attSamples = int(a * ma.SR);
+
+  envelope = it.interpolate_linear(fadeVal,from,to(state));
+  fadeVal = ramp(samples,trig):shaper;
+  samples = int(length(state) * ma.SR);
+  length(state) = select3(state,r,a,d);
+  trig = trigAttackDecay, trigDecay, trigRelease :> _>0;
+  trigRelease = gate-gate' == -1;
+  from = max(prevValue,trigDecay) : ba.sAndH(trig);
+  to(state) = select3(state,0,1,s); // release to 0, attack to 1, decay to sustain-level
+  shaper(x) =
+    // x;
+    select2(shapeState
+           ,map_log(x)
+           ,x  // t == 1 should be linear, not 0
+            // ,map_log((x+1)*-1)
+            // ,map_log((x+1)*-1)
+            // +1)*-1
+           );
+  // possiby make 3rd state:  positive c mirorred
+  map_log(x) = log (x * (t - 1) + 1) / log(t);  // from https://github.com/dariosanfilippo/edgeofchaos/blob/fff7e37ab80a5550421f7d4694c7de9b18b8b162/mathsEOC.lib#L881
+  shapeState =
+    t==1;
+  // + 2*checkbox("shape"):min(3);
+  // +t>1;
+  t = pow((c/((c<0)+1))+1,16);
+  c = curve(state);
+  curve(state) = select3(state,rc*-1,ac,dc*-1);
+  // curve(0) = rc;
+  // curve(1) = ac;
+  // curve(2) = dc;
+  attSamps = int(a * ma.SR);
+
+  // ramp from 1/n to 1 in n samples.  (don't start at 0 cause when the ramp restarts, the crossfade should start right away)
+  // when reset == 1, go back to 0.
+  // ramp(n,reset) = select2(reset,_+(1/n):min(1),0)~_;
+  ramp(n,reset) = select2(reset,_+(1/n):min(1),1/n)~_;
+};
+
+
+};
+
+
+///////////////////////////////////////////////////////////////////////////////
 //                                    MIDI                                   //
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -93,15 +161,24 @@ freq               = f*b;
 
 a                  = envelope_group(hslider("[0]attack [tooltip: Attack time in seconds][unit:s] [scale:log]", 0, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
 d                  = envelope_group(hslider("[1]decay [tooltip: Decay time in seconds][unit:s] [scale:log]", 0.5, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
-s                  = envelope_group(hslider("[2]sustain [tooltip: Sustain level]", 0, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
-r                  = envelope_group(hslider("[3]release [tooltip: Release time in seconds][unit:s] [scale:log]", 0.020, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
+s                  = envelope_group(hslider("[2]sustain [tooltip: Sustain level]", 0.5, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
+r                  = envelope_group(hslider("[3]release [tooltip: Release time in seconds][unit:s] [scale:log]", 0.050, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
 
-targetFreq         = punch_group(hslider("[0]target frequency", 45, 0, 127, 1)):ba.midikey2hz : si.polySmooth(gate,0.999,1);
+ac                  = envelope_group(hslider("[0]attack curve [tooltip: shape of the attack, 0 is linear]", 0, -1, 1, 0.001)): si.polySmooth(gate,0.999,1);
+dc                  = envelope_group(hslider("[1]decay curve [tooltip: shape of the decay, 0 is linear]", 0.5, -1, 1, 0.001)): si.polySmooth(gate,0.999,1);
+rc                  = envelope_group(hslider("[3]release curve [tooltip: shape of the release, 0 is linear]", 0.25, -1, 1, 0.001)): si.polySmooth(gate,0.999,1);
+
+targetFreq         = punch_group(hslider("[-2]target frequency", 37, 0, 127, 1)):ba.midikey2hz : si.polySmooth(gate,0.999,1);
 // targetFreq      = target_group(hslider("target freq", 110, minFreq, 880, 1)
 // : si.polySmooth(gate,0.999,1))
 // ;
-punch              = punch_group(hslider("[1]punch frequency", 69, 0, 127, 1)):ba.midikey2hz: si.polySmooth(gate,0.999,1);
-decayT             = punch_group(hslider("[2]decay time", 0.02, 0, 0.8, 0.001)): si.polySmooth(gate,0.999,1);
+punch              = punch_group(hslider("[-1]punch frequency", 101, 0, 127, 1)):ba.midikey2hz: si.polySmooth(gate,0.999,1);
+
+ap                 = punch_group(hslider("[0]attack [tooltip: Attack time in seconds][unit:s] [scale:log]", 0.002, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
+dp                 = punch_group(hslider("[1]decay [tooltip: Decay time in seconds][unit:s] [scale:log]", 0.150, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
+
+acp                 = punch_group(hslider("[0]attack curve [tooltip: shape of the attack, 0 is linear]", -0.5, -1, 1, 0.001)): si.polySmooth(gate,0.999,1);
+dcp                 = punch_group(hslider("[1]decay curve [tooltip: shape of the decay, 0 is linear]", -0.75, -1, 1, 0.001)): si.polySmooth(gate,0.999,1);
 
 retrigger          = checkbox("retrigger")*-1+1;
 level              = target_group(hslider("level", 0, -60, 0, 1): si.polySmooth(gate,0.999,1):ba.db2linear);
@@ -112,7 +189,6 @@ midi_group(x)      = tabs(vgroup("[1]midi", x));
 envelope_group(x)  = synth_group(vgroup("[0]envelope", x));
 punch_group(x)     = synth_group(vgroup("[1]punch", x));
 target_group(x)    = synth_group(vgroup("[2]target", x));
-// target_group(x) = synth_group(vgroup("target", x);
 ///////////////////////////////////////////////////////////////////////////////
 //                                 constants                                 //
 ///////////////////////////////////////////////////////////////////////////////

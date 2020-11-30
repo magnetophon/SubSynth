@@ -9,16 +9,26 @@ process =
   SubS(freq,gain,gate);
 
 ///////////////////////////////////////////////////////////////////////////////
+//                                    todo                                   //
+///////////////////////////////////////////////////////////////////////////////
+/*
+multi-target
+target mod
+env smooth tail: trig release at a certain level
+*/
+///////////////////////////////////////////////////////////////////////////////
 //                                   synth                                   //
 ///////////////////////////////////////////////////////////////////////////////
 
 SubS(freq,gain,gate) =
-  subOsc(targetFreq,freq,punch,gate:ba.impulsify ,gate)
+  subOsc(targetFreq,punchFreq,punchEnv,retrigger,gate,freq)
   // * (vel(lastNote)/127)
   // * level
   :>_*gainEnvelope<:(_,_)
 with {
   gainEnvelope = curved_adsr(a,d,s,r,ac,dc,rc,gate);
+  punchEnv =
+    curved_adsr(ap,dp,0,0.02,acp,dcp,0,gate);
 };
 
 
@@ -28,52 +38,39 @@ with {
 ///////////////////////////////////////////////////////////////////////////////
 
 
-subOsc(target,freq,absFreqOffset,retrigger,gate) =
+subOsc(target,punchFreq,punchEnv,retrigger,gate,freq) =
   slaveSine(fund)
  ,(slaveSine(fund*2:ma.frac))
   : xfade(fade)
-    // :fi.lowpass(3,max(target*2,absFreqOffset)*hslider("LP", 2, 1, 200, 0.5):min(20000):hbargraph("filter", 0, 20000):si.smoo)
-    // :fi.lowpass(3,max(target*2,punchFreq:ba.midikey2hz)*hslider("LP", 2, 1, 200, 0.5):min(20000):si.smoo)
 with {
-  PunchedFreq = ((subFreq:ba.hz2midikey)+(punchFreq*punchEnv)):ba.midikey2hz;
-  punchFreq = (absFreqOffset:ba.hz2midikey)-(subFreq:ba.hz2midikey);
+  PunchedFreq = subFreq * punchFreqRatio;
+  punchFreqRatio =
+    (punchFreq / subFreq)
+    :ba.ratio2semi *punchEnv
+    :ba.semi2ratio;
   subFreq = freq*oct/maxOct;
-  punchEnv =
-    // gate:ba.impulsify:si.lag_ud(0,decayT);
-    curved_adsr(ap,dp,0,0.02,acp,dcp,0,gate);
-  // hslider("pe", 0, 0, 1, 0.01);
 
   oct =
     pow2( octave )
-    // :hbargraph("[41]octMeter", 0, 2^13)
   ;
   octave =
     ma.log2
     ((target/freq)*maxOct)
-    +errorCorrection :int
-                      // :hbargraph("[40]octaveMeter", 0, 20)
+    :int
   ;
-  // without this, we get the wrong octave when freq=110 and target=110
-  singleprecision errorCorrection = 0;
-  doubleprecision errorCorrection = 0;
-  // found trough trial and error:
-  quadprecision errorCorrection = 0.000000000000000044685;
-
   maxOct = pow2(baseOct);
 
   fade =
     (target/PunchedFreq)
-    // :hbargraph("[32]target/PunchedFreq", 0, 2)
     -1:max(0):min(1)
-              // :hbargraph("[30]fade", 0, 1)
+    :hbargraph("[30]fade", 0, 1)
   ;
-
 
   lf_sawpos_trig(freq,trig) = ma.frac * dontReset ~ +(freq/ma.SR)
   with {
     dontReset  = trig:ba.impulsify*-1+1;
   };
-  masterOsc = lf_sawpos_trig(PunchedFreq/oct,gate);
+  masterOsc = lf_sawpos_trig(PunchedFreq/oct,gate & retrigger);
   fund = masterOsc*(oct):ma.frac;
   slaveSine(fund) = fund*ma.PI*2:sin;
   xfade(x,a,b) = it.interpolate_linear(x,a,b);
@@ -117,9 +114,6 @@ with {
     select2(shapeState
            ,map_log(x)
            ,x  // t == 1 should be linear, not 0
-            // ,map_log((x+1)*-1)
-            // ,map_log((x+1)*-1)
-            // +1)*-1
            );
   // possiby make 3rd state:  positive c mirorred
   map_log(x) = log (x * (t - 1) + 1) / log(t);  // from https://github.com/dariosanfilippo/edgeofchaos/blob/fff7e37ab80a5550421f7d4694c7de9b18b8b162/mathsEOC.lib#L881
@@ -129,10 +123,8 @@ with {
   // +t>1;
   t = pow((c/((c<0)+1))+1,16);
   c = curve(state);
+  // adjust polarity so more is more
   curve(state) = select3(state,rc*-1,ac,dc*-1);
-  // curve(0) = rc;
-  // curve(1) = ac;
-  // curve(2) = dc;
   attSamps = int(a * ma.SR);
 
   // ramp from 1/n to 1 in n samples.  (don't start at 0 cause when the ramp restarts, the crossfade should start right away)
@@ -154,9 +146,8 @@ f                  = midi_group(hslider("[1]freq",maxFreq,minFreq,maxFreq,0.001)
 b                  = midi_group(hslider("[2]bend [midi:pitchwheel]",0,-2,2,0.001):ba.semi2ratio): si.polySmooth(gate,0.999,1);
 gate               = midi_group( button("[3]gate"));
 // gate            = nrNotesPlaying>0;
-
 freq               = f*b;
-// freq            = (lastNote:ba.pianokey2hz) * b;
+// freq            = (lastNote:ba.pianokey2hz) * b:hbargraph("frequency", minFreq, maxFreq);
 // freq            = target_group(hslider("freq", 110, 55, 880, 1):si.smoo);
 
 a                  = envelope_group(hslider("[0]attack [tooltip: Attack time in seconds][unit:s] [scale:log]", 0, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
@@ -172,7 +163,7 @@ targetFreq         = punch_group(hslider("[-2]target frequency", 37, 0, 127, 1))
 // targetFreq      = target_group(hslider("target freq", 110, minFreq, 880, 1)
 // : si.polySmooth(gate,0.999,1))
 // ;
-punch              = punch_group(hslider("[-1]punch frequency", 101, 0, 127, 1)):ba.midikey2hz: si.polySmooth(gate,0.999,1);
+punchFreq              = punch_group(hslider("[-1]punch frequency", 101, 0, 127, 1)):ba.midikey2hz: si.polySmooth(gate,0.999,1);
 
 ap                 = punch_group(hslider("[0]attack [tooltip: Attack time in seconds][unit:s] [scale:log]", 0.002, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
 dp                 = punch_group(hslider("[1]decay [tooltip: Decay time in seconds][unit:s] [scale:log]", 0.150, 0, 1, 0.001)): si.polySmooth(gate,0.999,1);
